@@ -1,0 +1,41 @@
+name: Build Android ARM64 APK
+
+on:
+  workflow_dispatch: # Allows manual trigger
+  push:
+    branches: [ master, main ]
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Get Flutter Dependencies
+        run: flutter pub get
+
+      # Builds an ARM64 release APK. If the repo requires a local keystore
+      # that fails the release build, replace `--release` with `--debug`.
+      - name: Build ARM64 APK
+        run: flutter build apk --release --target-platform android-arm64 --split-per-abi
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coolapk-arm64-release
+          path: build/app/outputs/flutter-apk/*.apk
+          retention-days: 7
