@@ -1473,6 +1473,48 @@ onMounted(() => {
   }
 }
 
+@media (max-width: 600px) {
+  .app-header-card {
+    min-width: 0;
+    padding: 16px;
+  }
+
+  .metrics-cards-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .metric-card {
+    min-width: 0;
+    padding: 8px 10px;
+  }
+
+  .metric-card-top {
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .rating-score-num {
+    flex-shrink: 0;
+    font-size: 16px;
+  }
+
+  .stars-track {
+    gap: 1px;
+  }
+
+  .star-unit {
+    font-size: 10px;
+  }
+
+  .metric-tag-text {
+    min-width: 0;
+    font-size: 12px;
+  }
+}
+
 .qr-modal-body {
   display: flex;
   flex-direction: column;
@@ -1514,6 +1556,24 @@ onMounted(() => {
   font-size: var(--font-size-sub);
   font-weight: var(--font-weight-medium);
   cursor: pointer;
+}
+
+@media (max-width: 860px) {
+  .detail-tabs {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .detail-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .detail-tab-item {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
 }
 
 .detail-tab-item:hover,

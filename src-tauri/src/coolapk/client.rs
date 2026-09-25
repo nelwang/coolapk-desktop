@@ -9,11 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 接口路径需求：记录服务端配置中声明的写接口风控要求。
 ///
-/// `needs_ddid` 只用于保留服务端配置的可观测性；当前客户端明确不生成、
-/// 不追加、也不转发 `ddid`。
+/// `needs_ddid` 标记服务端要求携带 DDI 会话 Cookie 的写接口；请求层会在设置了会话值时添加 `ddid`。
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PathRequirements {
-    /// 服务端配置声明需要 `ddid`。客户端不会据此发送 `ddid`。
+    /// 服务端配置声明该路径需要 `ddid`。
     pub needs_ddid: bool,
     /// 需要表单携带 `_v2_post_token`（网易易盾滑块验证 Token）。
     pub needs_post_token: bool,
@@ -26,7 +25,6 @@ const DDI_EVENT_PATHS: &[&str] = &[
     "/v6/feed/reply",
     "/v6/feed/like",
     "/v6/feed/likeReply",
-    "/v6/message/send",
 ];
 
 /// 酷安服务端下发的 `PostToken.List`（需网易易盾 `_v2_post_token`）。
@@ -54,10 +52,15 @@ fn cookie_without_ddid(cookie: &str) -> String {
         .join("; ")
 }
 
-fn cookie_for_request(cookie: &str, _needs_ddid: bool) -> String {
-    // 保留参数是为了让调用点继续与服务端路径分类对齐，但无论路径如何，
-    // 当前兼容模式都只发送原有登录 Cookie。
-    cookie_without_ddid(cookie)
+fn cookie_for_request(cookie: &str, needs_ddid: bool, ddid: Option<&str>) -> String {
+    let cookie = cookie_without_ddid(cookie);
+    if !needs_ddid {
+        return cookie;
+    }
+    match ddid.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => merge_cookie_value(&cookie, "ddid", &encode_login_cookie_value(value)),
+        None => cookie,
+    }
 }
 
 /// 按酷安客户端 CookieInterceptor 的规则编码账号信息。
@@ -359,11 +362,31 @@ fn build_create_feed_form_for_type(
     form
 }
 
-/// 设备信息覆盖配置（由设置页"设备信息"下发，作用于所有 API 请求头）。
+/// 官方转发动态使用 forwardid 指向原动态；fid 留给回答等其他发布类型。
+fn build_forward_form(message: &str, pic: Option<&str>, forward_id: &str) -> Vec<(&'static str, String)> {
+    let mut form = build_create_feed_form(message, pic, None);
+    if let Some((_, value)) = form.iter_mut().find(|(name, _)| *name == "forwardid") {
+        *value = forward_id.to_string();
+    }
+    form
+}
+
+/// 设备信息覆盖配置（由设置页"设备信息"下发，作用于 API 请求头和设备身份）。
 /// 字段为 None 时使用客户端默认值；全部留空表示恢复默认。
-/// 注意：X-App-Device（设备码）与 X-App-Token 属于账号绑定指纹，不允许覆盖。
+/// device_id 用于 X-App-Device；ddid 仅在服务端要求 DDI 的写接口中作为 Cookie 发送。
 #[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeviceProfile {
+    /// 用户手动填写的数盟设备 ID，用于设备码首字段。
+    #[serde(default)]
+    pub device_id: Option<String>,
+    /// 用户手动填写的 DDI 会话值，仅作为指定写接口的 ddid Cookie 发送。
+    #[serde(default)]
+    pub ddid: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub build: Option<String>,
     #[serde(default)]
     pub user_agent: Option<String>,
     #[serde(default)]
@@ -563,11 +586,13 @@ fn get_str_by_keys(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Optio
     None
 }
 
-fn build_collection_list_query(uid: &str, page: u32) -> Vec<(&'static str, String)> {
+fn build_collection_list_query(uid: &str, page: u32, first_item: &str, last_item: &str) -> Vec<(&'static str, String)> {
     vec![
         ("uid", uid.to_string()),
         ("showDefault", "1".to_string()),
         ("page", page.to_string()),
+        ("firstItem", first_item.to_string()),
+        ("lastItem", last_item.to_string()),
     ]
 }
 
@@ -905,31 +930,78 @@ impl CoolapkClient {
         })
     }
 
-    /// 账号绑定的固定设备码：恢复 v1.9.1 及更早版本的 UID 派生算法。
-    ///
-    /// v1.10 曾把这里改成固定/数盟设备码并把 `deviceId` 写入请求身份，
-    /// 导致已有账号即使不发送 `ddid` 也会带着另一套 Token + 设备指纹。
-    /// 每次同步都重新按 UID 计算并持久化，顺便迁移已经保存的新版设备码。
+    /// 获取当前用户配置的有效数盟设备 ID（设备ID / ShuzlmID）
+    pub fn effective_custom_device_id(&self) -> Option<String> {
+        let guard = self.device_profile.read().ok()?;
+        guard
+            .device_id
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// 获取用户手动填写的 ddid Cookie 值。
+    fn effective_custom_ddid(&self) -> Option<String> {
+        let guard = self.device_profile.read().ok()?;
+        guard.ddid.as_ref().map(|value| value.trim().to_string()).filter(|value| !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control))
+    }
+
+    /// 在服务端要求 DDI 的写接口上使用设置页单独填写的会话值作为 ddid Cookie。
+    fn cookie_for_path(&self, cookie: &str, path: &str) -> String {
+        let needs_ddid = classify_path(path).needs_ddid;
+        let ddid = if needs_ddid { self.effective_custom_ddid() } else { None };
+        cookie_for_request(cookie, needs_ddid, ddid.as_deref())
+    }
+
+    /// 账号绑定的固定设备码：
+    /// 若用户在设置中配置了数盟设备 ID，则优先按该设备 ID 生成标准设备码；
+    /// 否则使用 UID 派生算法保持向后兼容。
     fn account_device_code(&self, uid: &str) -> String {
         let mut accounts = self.load_accounts();
-        let code = generate_device_code_for_id(uid);
+        let custom_id = self.effective_custom_device_id();
+        let code = if let Some(ref dev_id) = custom_id {
+            let (model, build) = if let Ok(guard) = self.device_profile.read() {
+                (guard.model.clone(), guard.build.clone())
+            } else {
+                (None, None)
+            };
+            generate_device_code_with_device_id(dev_id, model.as_deref(), build.as_deref())
+        } else {
+            generate_device_code_for_id(uid)
+        };
         if let Some(pos) = accounts
             .iter()
             .position(|a| a.get("uid").and_then(|v| v.as_str()) == Some(uid))
         {
             if let Some(obj) = accounts[pos].as_object_mut() {
                 obj.insert("deviceCode".to_string(), json!(code.clone()));
+                if let Some(ref dev_id) = custom_id {
+                    obj.insert("deviceId".to_string(), json!(dev_id.clone()));
+                }
             }
             self.save_accounts(&accounts);
             return code;
         }
-        accounts.push(json!({ "uid": uid, "cookie": "", "deviceCode": code.clone() }));
+        let mut account_val = json!({ "uid": uid, "cookie": "", "deviceCode": code.clone() });
+        if let Some(ref dev_id) = custom_id {
+            account_val["deviceId"] = json!(dev_id.clone());
+        }
+        accounts.push(account_val);
         self.save_accounts(&accounts);
         code
     }
 
-    /// 游客设备码：首次生成符合官方规范的标准设备码后固定持久化
+    /// 游客设备码：配置了数盟设备 ID 时优先使用，未配置时首次随机生成并持久化
     fn guest_device_code(&self) -> String {
+        let custom_id = self.effective_custom_device_id();
+        if let Some(ref dev_id) = custom_id {
+            let (model, build) = if let Ok(guard) = self.device_profile.read() {
+                (guard.model.clone(), guard.build.clone())
+            } else {
+                (None, None)
+            };
+            return generate_device_code_with_device_id(dev_id, model.as_deref(), build.as_deref());
+        }
         let mut root = self.load_accounts_root();
         if let Some(code) = root
             .get("guestDeviceCode")
@@ -1003,9 +1075,10 @@ impl CoolapkClient {
         if let Ok(mut guard) = self.device_profile.write() {
             *guard = profile;
         }
+        self.sync_device_code();
     }
 
-    /// 当前设备信息（设置页展示用）：登录态 + 生效设备码
+    /// 当前设备信息（设置页展示用）：登录态 + 生效设备码 + 自定义设备 ID
     pub fn get_device_info(&self) -> Result<Value, String> {
         let code = self
             .device_code
@@ -1017,7 +1090,15 @@ impl CoolapkClient {
             .read()
             .map_err(|_| "failed to read login state".to_string())?
             .is_some();
-        Ok(json!({ "code": 200, "data": { "loggedIn": logged_in, "deviceCode": code } }))
+        let device_id = self.effective_custom_device_id();
+        Ok(json!({
+            "code": 200,
+            "data": {
+                "loggedIn": logged_in,
+                "deviceCode": code,
+                "deviceId": device_id
+            }
+        }))
     }
 
     /// 绑定 Cookie 持久化文件路径，并载入上次保存的登录凭据
@@ -1444,8 +1525,7 @@ impl CoolapkClient {
             .map_err(|_| "failed to read login state".to_string())?
             .clone();
         if let Some(cookie) = cookie {
-            let req = classify_path(path);
-            let full_cookie = cookie_for_request(&cookie, req.needs_ddid);
+            let full_cookie = self.cookie_for_path(&cookie, path);
             if let Ok(header_val) = reqwest::header::HeaderValue::from_str(&full_cookie) {
                 request = request.header(COOKIE, header_val);
             }
@@ -1523,8 +1603,7 @@ impl CoolapkClient {
             .map_err(|_| "failed to read login state".to_string())?
             .clone();
         if let Some(cookie) = cookie {
-            let requirements = classify_path(path);
-            let full_cookie = cookie_for_request(&cookie, requirements.needs_ddid);
+            let full_cookie = self.cookie_for_path(&cookie, path);
             if let Ok(header_val) = HeaderValue::from_str(&full_cookie) {
                 request = request.header(COOKIE, header_val);
             }
@@ -1664,6 +1743,8 @@ impl CoolapkClient {
                 "extra_rows",
                 "productRows",
                 "product_rows",
+                "forwardSourceFeed",
+                "forward_source_feed",
             ],
         );
         let has_rating = has_any_non_empty_field(
@@ -1786,10 +1867,9 @@ impl CoolapkClient {
         );
         let fav_num = get_u64_by_keys(obj, &["favnum", "fav_num", "favorite_num"]);
         let share_num = get_u64_by_keys(obj, &["sharenum", "share_num"]);
-        let hit_num = get_u64_by_keys(
-            obj,
-            &["hitnum", "clicknum", "read_num", "view_num", "hit_num"],
-        );
+        // 官方不同列表会使用 readNum 或 viewnum；优先保留实际返回的非零浏览量。
+        let hit_num = ["readNum", "readnum", "read_num", "viewnum", "viewNum", "view_num", "hitnum", "hit_num", "clicknum"]
+            .iter().filter_map(|key| obj.get(*key).and_then(parse_u64_val)).find(|count| *count > 0).unwrap_or(0);
         let is_modified = get_u64_by_keys(obj, &["isModified", "is_modified"]);
         let change_count = get_u64_by_keys(obj, &["change_count", "changeCount"]);
         let last_change_time = get_u64_by_keys(obj, &["last_change_time", "lastChangeTime"]);
@@ -1829,6 +1909,7 @@ impl CoolapkClient {
             "likenum": likenum,
             "replynum": replynum,
             "hitnum": hit_num,
+            "readNum": hit_num,
             "favnum": fav_num,
             "sharenum": share_num,
             "isTop": is_top,
@@ -1843,11 +1924,19 @@ impl CoolapkClient {
             "dateline": get_u64_by_keys(obj, &["dateline", "create_time", "lastupdate", "createTime"])
         });
 
+        // APK 列表分页使用 Entity.entityId 生成 firstItem 和 lastItem，清洗时需要保留该游标字段。
+        copy_first_field(&mut cleaned, obj, "entityId", &["entityId", "entity_id"]);
+        copy_first_field(&mut cleaned, obj, "enableModify", &["enableModify", "enable_modify"]);
+
         // 列表接口会把关联标的和视频字段放在这些扩展字段中，必须在归一化时保留下来。
         copy_first_field(&mut cleaned, obj, "targetRow", &["targetRow", "target_row"]);
         copy_first_field(&mut cleaned, obj, "relationRows", &["relationRows", "relation_rows"]);
         copy_first_field(&mut cleaned, obj, "extraRows", &["extraRows", "extra_rows"]);
         copy_first_field(&mut cleaned, obj, "productRows", &["productRows", "product_rows"]);
+        // 转发动态的原文由服务端放在 forwardSourceFeed，列表清洗时需要保留。
+        copy_first_field(&mut cleaned, obj, "forwardSourceFeed", &["forwardSourceFeed", "forward_source_feed"]);
+        copy_first_field(&mut cleaned, obj, "forwardSourceType", &["forwardSourceType", "forward_source_type"]);
+        copy_first_field(&mut cleaned, obj, "forwardId", &["forwardid", "forwardId", "forward_id"]);
         // 回答动态的 fid 是所属问题 ID；首页清洗时必须保留，否则点击回答只能退化到 /feed/:id。
         copy_first_field(&mut cleaned, obj, "questionId", &["questionId", "question_id", "fid", "f_id"]);
         copy_first_field(&mut cleaned, obj, "answerId", &["answerId", "answer_id"]);
@@ -3447,6 +3536,56 @@ impl CoolapkClient {
         ))
     }
 
+    /// APK 二次编辑先读取 changeDetail，服务端在这里返回可编辑状态和原始内容。
+    pub async fn get_editable_feed(&self, feed_id: &str) -> Result<Value, String> {
+        wrap_api_data(self.api_get("/v6/feed/changeDetail", &[("id", feed_id.to_string()), ("rid", String::new()), ("noticeId", String::new()), ("fromApi", String::new())]).await?)
+    }
+
+    /// 与 APK 的 FeedMultiPart 一样保留原动态字段，只替换正文和图片。
+    pub async fn update_feed(&self, feed_id: &str, message: &str, pic: &str, post_token: Option<&str>) -> Result<Value, String> {
+        let detail = self.get_editable_feed(feed_id).await?;
+        let original = detail.get("data").ok_or_else(|| "获取可编辑动态失败".to_string())?;
+        let original_id = original.get("id").map(value_to_string).unwrap_or_default();
+        if original_id != feed_id { return Err("可编辑动态 ID 不匹配".to_string()); }
+        if let Some(allowed) = original.get("enableModify").or_else(|| original.get("enable_modify")) {
+            if parse_u64_val(allowed) != Some(1) { return Err("此动态当前不允许编辑或编辑次数已用尽".to_string()); }
+        }
+        let feed_type = original.get("feedType").or_else(|| original.get("feed_type")).and_then(Value::as_str).unwrap_or("feed");
+        if feed_type != "feed" { return Err("目前只支持重新编辑普通动态".to_string()); }
+        let original_obj = original.as_object().ok_or_else(|| "动态格式无效".to_string())?;
+        if get_u64_by_keys(original_obj, &["isHtmlArticle", "is_html_article"]) > 0 || get_u64_by_keys(original_obj, &["mediaType", "media_type"]) > 0 || original.get("mediaUrl").or_else(|| original.get("media_url")).and_then(Value::as_str).is_some_and(|value| !value.is_empty()) { return Err("目前只支持重新编辑普通图文动态".to_string()); }
+        if message.trim().is_empty() && pic.trim().is_empty() { return Err("动态内容不能为空".to_string()); }
+        if message.chars().count() > 1000 { return Err("动态内容超过 1000 字".to_string()); }
+
+        let mut form = build_create_feed_form(message, Some(pic), None);
+        for (key, value) in &mut form {
+            if *key == "id" { *value = feed_id.to_string(); continue; }
+            let source_keys: &[&str] = match *key {
+                "publish_status" => &["publish_status", "publishStatus"], "location" => &["location"], "long_location" => &["long_location", "longLocation"],
+                "latitude" => &["latitude"], "longitude" => &["longitude"], "media_url" => &["media_url", "mediaUrl"], "media_type" => &["media_type", "mediaType"],
+                "media_pic" => &["media_pic", "mediaPic"], "message_title" => &["message_title", "messageTitle"], "message_brief" => &["message_brief", "messageBrief"],
+                "extra_title" => &["extra_title", "extraTitle"], "extra_url" => &["extra_url", "extraUrl"], "extra_key" => &["extra_key", "extraKey"],
+                "extra_pic" => &["extra_pic", "extraPic"], "extra_info" => &["extra_info", "extraInfo"], "message_cover" => &["message_cover", "messageCover"],
+                "original_type" => &["original_type", "originalType"], "is_editInDyh" => &["is_editInDyh", "isEditInDyh"], "forwardid" => &["forwardid", "forwardId"],
+                "fid" => &["fid"], "dyhId" => &["dyhId", "dyh_id"], "targetType" => &["targetType", "target_type"], "productId" => &["productId", "product_id"],
+                "targetId" => &["targetId", "target_id"], "location_city" => &["location_city", "locationCity"], "location_country" => &["location_country", "locationCountry"],
+                "disallow_reply" => &["disallow_reply", "disallowReply"], "vote_score" => &["vote_score", "voteScore"], "replyWithForward" => &["replyWithForward", "reply_with_forward"],
+                "media_info" => &["media_info", "mediaInfo"], "insert_product_media" => &["insert_product_media", "insertProductMedia"], "is_ks_doc" => &["is_ks_doc", "isKsDoc"],
+                "goods_list_id" => &["goods_list_id", "goodsListId"], "is_html_article" => &["is_html_article", "isHtmlArticle"], _ => &[],
+            };
+            if let Some(raw) = source_keys.iter().find_map(|source_key| original.get(*source_key).filter(|value| !value.is_null())) {
+                *value = if let Some(flag) = raw.as_bool() { if flag { "1" } else { "0" }.to_string() } else { value_to_string(raw) };
+            }
+        }
+        for (key, source_keys) in [("province", &["province"][..]), ("city_code", &["city_code", "cityCode"][..])] {
+            if let Some(raw) = source_keys.iter().find_map(|source_key| original.get(*source_key).filter(|value| !value.is_null())) { form.push((key, value_to_string(raw))); }
+        }
+        if let Some(token) = post_token.filter(|token| !token.trim().is_empty()) { form.push(("_v2_post_token", token.to_string())); }
+        let updated = wrap_api_data(self.api_post("/v6/feed/changeFeed", &[], &form).await?)?;
+        if updated.get("data").and_then(|data| data.get("id")).map(value_to_string).as_deref() != Some(feed_id) { return Err("服务端未返回修改后的动态，请刷新确认".to_string()); }
+        Ok(updated)
+    }
+
     /// 按 APK 的回退链路，把 Video.requestParams 交给酷安播放器接口解析。
     ///
     /// APK 的 `CoolApkDataProvider` 先尝试本地 videoParser；解析失败时调用
@@ -3789,6 +3928,11 @@ impl CoolapkClient {
             self.api_get("/v6/user/profile", &[("uid", uid.to_string())])
                 .await?,
         )
+    }
+
+    /// 读取当前登录用户维护的用户备注列表。
+    pub async fn get_user_remark_list(&self, uid: &str) -> Result<Value, String> {
+        wrap_api_data(self.api_get("/v6/user/remarkList", &[("uid", uid.to_string())]).await?)
     }
 
     /// 修改个人资料字段。对应 APK 的 POST /v6/account/changeProfile。
@@ -4250,13 +4394,14 @@ impl CoolapkClient {
     }
 
     /// 收藏单（收藏夹）列表
-    /// 数据来源: GET /v6/collection/list?uid={uid}&showDefault=1
+    /// 数据来源: GET /v6/collection/list?uid={uid}&showDefault=1&page={page}&firstItem={firstItem}&lastItem={lastItem}
     /// `showDefault=1` 用于把账号的系统默认收藏单一并返回；否则接口只返回用户创建的收藏单。
-    pub async fn get_collection_list(&self, uid: &str, page: u32) -> Result<Value, String> {
+    /// APK 用首项和末项的 entityId 作为分页游标。
+    pub async fn get_collection_list(&self, uid: &str, page: u32, first_item: &str, last_item: &str) -> Result<Value, String> {
         let raw = self
             .api_get(
                 "/v6/collection/list",
-                &build_collection_list_query(uid, page),
+                &build_collection_list_query(uid, page, first_item, last_item),
             )
             .await?;
         let mut collections = Vec::new();
@@ -4302,6 +4447,7 @@ impl CoolapkClient {
                     .unwrap_or(json!(0));
                 collections.push(json!({
                     "id": id,
+                    "entityId": get_str_by_keys(obj, &["entityId", "entity_id"]).unwrap_or_else(|| id.clone()),
                     "title": title,
                     "cover": cover.clone(),
                     "coverPic": cover,
@@ -4325,6 +4471,8 @@ impl CoolapkClient {
         &self,
         collection_id: &str,
         page: u32,
+        first_item: &str,
+        last_item: &str,
     ) -> Result<Value, String> {
         let raw = self
             .api_get(
@@ -4332,8 +4480,8 @@ impl CoolapkClient {
                 &[
                     ("id", collection_id.to_string()),
                     ("page", page.to_string()),
-                    ("firstItem", String::new()),
-                    ("lastItem", String::new()),
+                    ("firstItem", first_item.to_string()),
+                    ("lastItem", last_item.to_string()),
                     ("listType", "allFeedType".to_string()),
                 ],
             )
@@ -5311,7 +5459,7 @@ impl CoolapkClient {
     /// 发送私信（需登录）
     ///
     /// 私信沿用 v1.9.1 及更早版本的兼容签名：旧版 Token cost=10、当前
-    /// 账号 UID 派生设备码，并且 Cookie 明确移除 `ddid`。请求体仍按当前
+    /// 使用设置中的数盟 ID 更新 DDI 写请求 Cookie。请求体仍按当前
     /// APK 的 `message/send` 契约发送 multipart，并补齐 `quick_reply=1`、
     /// 空图片和空扩展字段。
     pub async fn send_private_message(&self, uid: &str, message: &str) -> Result<Value, String> {
@@ -5348,7 +5496,7 @@ impl CoolapkClient {
             .map_err(|_| "failed to read login state".to_string())?
             .clone();
         if let Some(cookie) = cookie {
-            let full_cookie = cookie_for_request(&cookie, true);
+            let full_cookie = self.cookie_for_path(&cookie, "/v6/message/send");
             if let Ok(header_val) = reqwest::header::HeaderValue::from_str(&full_cookie) {
                 request = request.header(COOKIE, header_val);
             }
@@ -5394,7 +5542,7 @@ impl CoolapkClient {
             .map_err(|_| "failed to read login state".to_string())?
             .clone();
         if let Some(cookie) = cookie {
-            let full_cookie = cookie_for_request(&cookie, true);
+            let full_cookie = self.cookie_for_path(&cookie, "/v6/message/send");
             if let Ok(header_val) = reqwest::header::HeaderValue::from_str(&full_cookie) {
                 request = request.header(COOKIE, header_val);
             }
@@ -5467,7 +5615,7 @@ impl CoolapkClient {
             .map_err(|_| "failed to read login state".to_string())?
             .clone();
         if let Some(cookie) = cookie {
-            let full_cookie = cookie_for_request(&cookie, true);
+            let full_cookie = self.cookie_for_path(&cookie, path);
             if let Ok(header_val) = reqwest::header::HeaderValue::from_str(&full_cookie) {
                 request = request.header(COOKIE, header_val);
             }
@@ -5945,7 +6093,7 @@ impl CoolapkClient {
 
     pub async fn follow_user(&self, uid: &str) -> Result<Value, String> {
         wrap_api_data(
-            self.api_get("/v6/user/follow", &[("uid", uid.to_string())])
+            self.api_post("/v6/user/follow", &[("uid", uid.to_string())], &[])
                 .await?,
         )
     }
@@ -6239,7 +6387,7 @@ impl CoolapkClient {
             .map_err(|_| "failed to read login state".to_string())?
             .clone();
         if let Some(cookie) = cookie {
-            let full_cookie = cookie_for_request(&cookie, true);
+            let full_cookie = self.cookie_for_path(&cookie, "/v6/feed/createFeed");
             if let Ok(header_val) = reqwest::header::HeaderValue::from_str(&full_cookie) {
                 request = request.header(COOKIE, header_val);
             }
@@ -6307,65 +6455,17 @@ impl CoolapkClient {
     }
 
     /// 转发动态（需登录）
-    /// 官方无独立转发接口（/v6/feed/forward、/v6/feed/repost 均不存在），
-    /// 通过 createFeed 携带 fid 实现：POST multipart /v6/feed/createFeed。
-    /// 实测：参数名必须是 fid（forward_id 会被服务端当成普通动态发布，fid=0）
+    /// 官方通过 createFeed 的 forwardid 字段关联原动态，使用表单提交。
     pub async fn create_forward(
         &self,
         feed_id: &str,
         message: &str,
         pic: Option<&str>,
     ) -> Result<Value, String> {
-        let token = self.get_token()?;
-        let mut form = reqwest::multipart::Form::new()
-            .text("message", message.to_string())
-            .text("type", "feed".to_string())
-            .text("is_html_article", "0".to_string())
-            .text("fid", feed_id.to_string());
-        if let Some(pic) = pic {
-            if !pic.is_empty() {
-                form = form.text("pic", pic.to_string());
-            }
+        if feed_id.trim().is_empty() {
+            return Err("转发失败：原动态 ID 为空".to_string());
         }
-
-        let mut request = self.apply_device_profile(
-            self.client
-                .request(
-                    reqwest::Method::POST,
-                    "https://api.coolapk.com/v6/feed/createFeed",
-                )
-                .header("X-App-Token", token)
-                .header("X-Requested-With", "XMLHttpRequest")
-                .multipart(form),
-        )?;
-
-        let cookie = self
-            .user_cookie
-            .read()
-            .map_err(|_| "failed to read login state".to_string())?
-            .clone();
-        if let Some(cookie) = cookie {
-            let full_cookie = cookie_for_request(&cookie, true);
-            if let Ok(header_val) = reqwest::header::HeaderValue::from_str(&full_cookie) {
-                request = request.header(COOKIE, header_val);
-            }
-        }
-
-        let response = request.send().await.map_err(|e| e.to_string())?;
-        let wrapped = wrap_api_data(response_json(response).await?)?;
-        let created = wrapped
-            .get("data")
-            .and_then(|d| d.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
-            .or_else(|| {
-                wrapped
-                    .get("data")
-                    .and_then(|d| d.get("id").and_then(|v| v.as_u64()))
-                    .map(|n| n.to_string())
-            });
-        if created.is_none() {
-            return Err("转发失败：服务端未返回转发结果，请重试".to_string());
-        }
-        Ok(wrapped)
+        self.submit_create_feed_form(build_forward_form(message, pic, feed_id), "转发失败：").await
     }
 
     pub async fn check_login_status(&self) -> Result<Value, String> {
@@ -7987,10 +8087,29 @@ fn is_valid_device_code(code: &str) -> bool {
     false
 }
 
+/// 根据指定的数盟设备 ID（设备ID / ShuzlmID）生成官方标准设备码。
+///
+/// 官方标准 X-App-Device 格式为：
+/// `{device_id}; ; ; ; {manufacturer}; {brand}; {model}; {build}; {oaid}`
+/// 经 Base64 编码、字符逆序并剔除换行与 `=` 填充符生成。
+fn generate_device_code_with_device_id(
+    device_id: &str,
+    model: Option<&str>,
+    build: Option<&str>,
+) -> String {
+    let model = model.filter(|s| !s.trim().is_empty()).unwrap_or("23113RKC6C");
+    let build = build.filter(|s| !s.trim().is_empty()).unwrap_or("AQ3A.250226.002");
+    let raw = format!("{device_id}; ; ; ; Xiaomi; Xiaomi; {model}; {build}; ");
+    let b64 = BASE64.encode(raw.as_bytes());
+    let mut rev: String = b64.chars().rev().collect();
+    rev.retain(|c| c != '=' && c != '\r' && c != '\n');
+    rev
+}
+
 /// v1.9.1 及更早版本使用的账号设备码。
 ///
 /// 账号请求身份由 UID 派生 Android ID，再按官方客户端的逆序 Base64
-/// 格式生成。该兼容链路不需要数盟设备注册 ID，也不会生成或发送 `ddid`。
+/// 格式生成。该函数只生成设备码；`ddid` 由请求层按设置和接口路径添加。
 fn generate_device_code_for_id(uid: &str) -> String {
     use md5::{Digest, Md5};
 

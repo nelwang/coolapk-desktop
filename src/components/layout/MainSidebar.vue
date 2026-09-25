@@ -1,16 +1,30 @@
 <template>
-  <aside :class="['main-sidebar', { 'is-collapsed': isCollapsed }]">
-    <!-- 图二同款：吸附在侧边栏右侧分割线边缘的凸起折叠手柄按钮 -->
+  <Teleport to="#app">
     <button
+      v-if="mobileOpen"
+      type="button"
+      :class="['mobile-sidebar-backdrop', { 'has-window-controls': mobileWindowControls }]"
+      aria-label="关闭导航菜单"
+      @click="emit('closeMobile')"
+    ></button>
+  </Teleport>
+
+  <aside :class="['main-sidebar', { 'is-collapsed': isCollapsed, 'is-mobile-open': mobileOpen, 'has-window-controls': mobileWindowControls }]">
+    <div v-if="mobileOpen" class="mobile-navigation-header">
+      <strong>快捷入口</strong>
+      <span>频道与常用功能</span>
+    </div>
+
+    <!-- 截图同款：吸附在侧边栏右侧分割线边缘的小圆形折叠手柄。 -->
+    <button
+      v-if="!mobileOpen"
       class="sidebar-floating-toggle-btn"
       :title="isCollapsed ? '展开侧边栏' : '收起侧边栏'"
       @click="settingsStore.toggleSidebar"
     >
-      <svg class="dock-toggle-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3" y="3" width="18" height="18" rx="3" ry="3" />
-        <line x1="9" y1="3" x2="9" y2="21" />
-        <path v-if="isCollapsed" d="M13 15l3-3m0 0l-3-3m3 3H11" />
-        <path v-else d="M15 15l-3-3m0 0l3-3m-3 3h4" />
+      <svg class="dock-toggle-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+        <path v-if="isCollapsed" d="M9 6l6 6-6 6" />
+        <path v-else d="M15 6l-6 6 6 6" />
       </svg>
     </button>
 
@@ -23,10 +37,10 @@
           class="nav-item"
           active-class="is-active"
           :title="item.label"
-          @click="triggerSidebarTransition()"
+          @click="handleNavSelection"
         >
           <i :class="[item.icon, 'nav-icon']"></i>
-          <span v-if="!isCollapsed" class="nav-label">{{ item.label }}</span>
+          <span v-if="!isCollapsed || mobileOpen" class="nav-label">{{ item.label }}</span>
         </router-link>
 
         <router-link
@@ -35,10 +49,10 @@
           class="nav-item"
           :class="{ 'is-active': isMoreActive }"
           title="更多服务与专区"
-          @click="triggerSidebarTransition()"
+          @click="handleNavSelection"
         >
           <i class="fas fa-shapes nav-icon"></i>
-          <span v-if="!isCollapsed" class="nav-label">更多</span>
+          <span v-if="!isCollapsed || mobileOpen" class="nav-label">更多</span>
         </router-link>
 
       </div>
@@ -53,10 +67,10 @@
           class="nav-item"
           active-class="is-active"
           :title="getNavTitle(item)"
-          @click="triggerSidebarTransition()"
+          @click="handleNavSelection"
         >
           <i :class="[item.icon, 'nav-icon']"></i>
-          <span v-if="!isCollapsed" class="nav-label">{{ item.label }}</span>
+          <span v-if="!isCollapsed || mobileOpen" class="nav-label">{{ item.label }}</span>
           <span
             v-if="getNavBadge(item.key) > 0"
             :class="['nav-badge', { 'is-wide': getNavBadge(item.key) > 9 }]"
@@ -73,43 +87,26 @@
         :class="{ 'is-active': isMyActive }"
         active-class="is-active"
         title="我的"
-        @click="triggerSidebarTransition()"
+        @click="handleNavSelection"
       >
         <i class="fas fa-user nav-icon"></i>
-        <span v-if="!isCollapsed" class="nav-label">我的</span>
+        <span v-if="!isCollapsed || mobileOpen" class="nav-label">我的</span>
       </router-link>
 
       <div class="nav-divider"></div>
 
       <div class="nav-group">
-        <router-link
-          v-if="downloadsVisible"
-          to="/downloads"
-          class="nav-item"
-          active-class="is-active"
-          :title="getNavTitle({ key: 'downloads', label: '下载' })"
-          @click="triggerSidebarTransition()"
-        >
-          <i class="fas fa-download nav-icon"></i>
-          <span v-if="!isCollapsed" class="nav-label">下载</span>
-          <span
-            v-if="getNavBadge('downloads') > 0"
-            :class="['nav-badge', { 'is-wide': getNavBadge('downloads') > 9 }]"
-          >
-            {{ getNavBadge('downloads') > 99 ? '99+' : getNavBadge('downloads') }}
-          </span>
-        </router-link>
-        <router-link to="/settings" class="nav-item" active-class="is-active" title="设置" @click="triggerSidebarTransition()">
+        <router-link to="/settings" class="nav-item" active-class="is-active" title="设置" @click="handleNavSelection">
           <i class="fas fa-cog nav-icon"></i>
-          <span v-if="!isCollapsed" class="nav-label">设置</span>
+          <span v-if="!isCollapsed || mobileOpen" class="nav-label">设置</span>
         </router-link>
       </div>
     </nav>
 
-    <div v-if="!isCollapsed" class="sidebar-footer">
+    <div v-if="!isCollapsed || mobileOpen" class="sidebar-footer">
       <div class="app-info-card">
         <div class="app-info-top">
-          <span class="app-name">酷安桌面版</span>
+          <span class="app-name">{{ appDisplayName }}</span>
           <span class="version-badge">v{{ appVersion }}</span>
         </div>
         <div class="app-info-actions">
@@ -145,6 +142,17 @@ const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
 const downloadStore = useDownloadStore();
 const appVersion = APP_VERSION;
+const appDisplayName = computed(() => /android|iphone|ipad|ipod/i.test(navigator.userAgent) ? '酷安' : '酷安桌面版');
+
+const props = withDefaults(defineProps<{ mobileOpen?: boolean; mobileWindowControls?: boolean }>(), { mobileOpen: false, mobileWindowControls: false });
+const emit = defineEmits<{ closeMobile: [] }>();
+
+const mobileOpen = computed(() => props.mobileOpen);
+
+function handleNavSelection() {
+  emit('closeMobile');
+  triggerSidebarTransition();
+}
 
 function handleFeedback() {
   openFeedbackMessage(router, authStore);
@@ -175,7 +183,6 @@ const allPrimaryNavs = [
   { key: 'discover', path: '/discover', label: '发现', icon: 'fas fa-compass' },
   { key: 'topics', path: '/topics', label: '话题', icon: 'fas fa-hashtag' },
   { key: 'pictures', path: '/pictures', label: '酷图', icon: 'far fa-images' },
-  { key: 'apps', path: '/apps', label: '应用', icon: 'fas fa-cubes' },
 ];
 
 const allSecondaryNavs = [
@@ -201,6 +208,8 @@ const secondaryNavs = computed(() => {
 // 属于“更多专区”的下属路由集合
 const moreSubPaths = [
   '/more',
+  '/apps',
+  '/downloads',
   '/my-products',
   '/goods',
   '/center',
@@ -256,7 +265,6 @@ const isMyActive = computed(() => {
 
 const moreVisible = computed(() => settingsStore.settings.navVisibility?.more !== false);
 const myVisible = computed(() => settingsStore.settings.navVisibility?.my !== false);
-const downloadsVisible = computed(() => settingsStore.settings.navVisibility?.downloads !== false);
 function getNavBadge(key: string): number {
   if (key === 'notifications') return notificationStore.notificationCount;
   if (key === 'messages') return notificationStore.messageCount;
@@ -289,40 +297,42 @@ function handleLogout() {
   flex-direction: column;
   height: 100%;
   transition: width var(--duration-normal) var(--ease-default);
-  z-index: 10;
+  /* 按钮会向内容区伸出少量空间，层级需要高于标签栏才能保证显示和点击。 */
+  z-index: 750;
 }
 
 .main-sidebar.is-collapsed {
   width: var(--sidebar-collapsed-width);
 }
 
-/* 图二同款：吸附在侧边栏右侧分割线边缘的凸起折叠手柄按钮 */
 .sidebar-floating-toggle-btn {
   position: absolute;
-  /* 标签栏加入后继续保持在正文顶部下方，避免覆盖第一个标签及其拖动区域。 */
-  top: calc(var(--page-tabbar-height, 38px) + 20px);
-  right: -13px;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-sm, 8px);
-  background-color: var(--surface);
+  top: 14px;
+  right: -10px;
+  z-index: 20;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   border: 1px solid var(--border);
+  border-radius: 50%;
+  background-color: var(--surface);
   color: var(--text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  z-index: 99;
-  transition: all var(--duration-fast) var(--ease-default);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.1);
+  transition: background-color var(--duration-fast) var(--ease-default), border-color var(--duration-fast) var(--ease-default), color var(--duration-fast) var(--ease-default), transform var(--duration-fast) var(--ease-default);
 }
 
 .sidebar-floating-toggle-btn:hover {
   background-color: var(--surface-hover);
   border-color: var(--brand-primary);
   color: var(--brand-primary);
-  transform: scale(1.12);
-  box-shadow: 0 3px 10px rgba(16, 185, 129, 0.2);
+}
+
+.sidebar-floating-toggle-btn:active {
+  transform: scale(0.94);
 }
 
 .dock-toggle-icon {
@@ -663,6 +673,23 @@ function handleLogout() {
     height: 14px;
     padding: 0 3px;
     line-height: 14px;
+  }
+}
+
+@media (max-width: 720px) {
+  .mobile-sidebar-backdrop {
+    position: fixed;
+    inset: var(--mobile-topbar-height) 0 var(--mobile-bottom-nav-height);
+    z-index: 1000;
+    display: block;
+    padding: 0;
+    border: 0;
+    background: rgba(15, 23, 42, 0.3);
+    touch-action: manipulation;
+  }
+
+  .mobile-sidebar-backdrop.has-window-controls {
+    top: calc(var(--mobile-window-controls-height) + var(--mobile-topbar-height));
   }
 }
 </style>

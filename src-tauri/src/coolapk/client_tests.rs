@@ -24,7 +24,6 @@ fn test_classify_path_detects_requirements() {
     assert!(classify_path("/v6/feed/like").needs_ddid);
     assert!(!classify_path("/v6/feed/unlike").needs_ddid);
     assert!(classify_path("/v6/feed/likeReply").needs_ddid);
-    assert!(classify_path("/v6/message/send").needs_ddid);
     // PostToken 接口：发动态/评论需要 _v2_post_token
     assert!(classify_path("/v6/feed/createFeed").needs_post_token);
     assert!(classify_path("/v6/feed/reply").needs_post_token);
@@ -40,7 +39,11 @@ fn test_classify_path_detects_requirements() {
 fn test_ddid_is_not_sent_when_disabled() {
     let cookie = "SESSID=session; uid=123; ddid=stale-ddid; sid=other";
     assert_eq!(cookie_without_ddid(cookie), "SESSID=session; uid=123; sid=other");
-    assert!(!cookie_for_request(cookie, true).contains("ddid="));
+    assert!(!cookie_for_request(cookie, true, None).contains("ddid="));
+    assert!(!cookie_for_request(cookie, false, Some("DU-MOCK-TEST-ID")).contains("ddid="));
+    let configured = cookie_for_request(cookie, true, Some("DU-MOCK-TEST-ID"));
+    assert!(configured.contains("ddid=DU-MOCK-TEST-ID"));
+    assert!(!configured.contains("stale-ddid"));
 }
 
 #[test]
@@ -115,13 +118,25 @@ fn test_secondhand_product_list_query_matches_apk_contract() {
 }
 
 #[test]
-fn test_collection_list_query_includes_default_collection() {
+fn test_collection_list_query_includes_default_collection_and_page_cursor() {
     assert_eq!(
-        build_collection_list_query("12345", 1),
+        build_collection_list_query("12345", 1, "", ""),
         vec![
             ("uid", "12345".to_string()),
             ("showDefault", "1".to_string()),
             ("page", "1".to_string()),
+            ("firstItem", "".to_string()),
+            ("lastItem", "".to_string()),
+        ]
+    );
+    assert_eq!(
+        build_collection_list_query("12345", 2, "collection-100", "collection-90"),
+        vec![
+            ("uid", "12345".to_string()),
+            ("showDefault", "1".to_string()),
+            ("page", "2".to_string()),
+            ("firstItem", "collection-100".to_string()),
+            ("lastItem", "collection-90".to_string()),
         ]
     );
 }
@@ -284,6 +299,16 @@ fn test_create_answer_form_uses_answer_type_and_question_fid() {
 }
 
 #[test]
+fn test_forward_form_uses_forwardid_instead_of_fid() {
+    let form = build_forward_form("转发内容", Some("https://image.coolapk.com/feed/test.png"), "feed-42");
+    let value = |key: &str| form.iter().find(|(name, _)| *name == key).map(|(_, value)| value.as_str());
+    assert_eq!(value("forwardid"), Some("feed-42"));
+    assert_eq!(value("fid"), Some(""));
+    assert_eq!(value("type"), Some("feed"));
+    assert_eq!(value("pic"), Some("https://image.coolapk.com/feed/test.png"));
+}
+
+#[test]
 fn test_hot_rank_routes_use_statistics_api() {
     assert_eq!(
         rank_feed_url("month"),
@@ -316,6 +341,13 @@ fn test_clean_feed_keeps_edit_metadata() {
     assert_eq!(cleaned["isModified"], 1);
     assert_eq!(cleaned["changeCount"], 2);
     assert_eq!(cleaned["lastChangeTime"], 1_786_000_100_u64);
+}
+
+#[test]
+fn test_clean_feed_keeps_apk_read_num() {
+    let raw = json!({"id": 123, "uid": 456, "username": "测试用户", "message": "测试正文", "readNum": 604000, "hitnum": 12});
+    let cleaned = CoolapkClient::clean_single_feed(&raw, 0).expect("动态应能正常清洗");
+    assert_eq!(cleaned["readNum"], 604000);
 }
 
 #[test]
@@ -420,6 +452,15 @@ fn test_clean_answer_keeps_parent_question_id() {
     let cleaned = CoolapkClient::clean_single_feed(&raw, 0).expect("回答动态应能正常清洗");
     assert_eq!(cleaned["feedType"], "answer");
     assert_eq!(cleaned["questionId"], 789);
+}
+
+#[test]
+fn test_clean_forward_keeps_source_feed() {
+    let raw = json!({"id": 124, "uid": 456, "username": "转发用户", "message": "转发内容", "forwardid": "123", "forwardSourceType": "feed", "forwardSourceFeed": {"id": "123", "entityType": "feed", "username": "原作者", "message": "原动态内容"}});
+    let cleaned = CoolapkClient::clean_single_feed(&raw, 0).expect("转发动态应能正常清洗");
+    assert_eq!(cleaned["forwardId"], "123");
+    assert_eq!(cleaned["forwardSourceType"], "feed");
+    assert_eq!(cleaned["forwardSourceFeed"]["message"], "原动态内容");
 }
 
 #[test]
@@ -1176,4 +1217,40 @@ async fn test_live_oss_and_reply() {
         .upload_image(&fake_png, "test_dot.png", "image/png", "feed", None)
         .await;
     println!("upload_res = {:?}", upload_res);
+}
+
+#[test]
+fn test_generate_device_code_with_device_id() {
+    let custom_id = "DU-MOCK-TEST-DEVICE-ID-99999999";
+    let code = generate_device_code_with_device_id(custom_id, Some("23113RKC6C"), Some("AQ3A.250226.002"));
+    assert!(is_valid_device_code(&code));
+
+    let mut rev_code: String = code.chars().rev().collect();
+    while rev_code.len() % 4 != 0 {
+        rev_code.push('=');
+    }
+    let decoded_bytes = BASE64.decode(rev_code.as_bytes()).expect("base64 decode failed");
+    let decoded = String::from_utf8(decoded_bytes).expect("valid utf8");
+    assert!(decoded.starts_with(&format!("{custom_id}; ; ; ; Xiaomi; Xiaomi; 23113RKC6C; AQ3A.250226.002; ")));
+}
+
+#[test]
+fn test_update_device_profile_with_device_id() {
+    let client = CoolapkClient::new();
+    let custom_id = "DU-MOCK-TEST-DEVICE-ID-99999999";
+
+    client.update_device_profile(DeviceProfile {
+        device_id: Some(custom_id.to_string()),
+        model: Some("23113RKC6C".to_string()),
+        build: Some("AQ3A.250226.002".to_string()),
+        ..Default::default()
+    });
+
+    assert_eq!(client.effective_custom_device_id(), Some(custom_id.to_string()));
+
+    let info = client.get_device_info().expect("get_device_info");
+    assert_eq!(info["data"]["deviceId"].as_str(), Some(custom_id));
+
+    let active_code = client.device_code.read().unwrap().clone();
+    assert!(is_valid_device_code(&active_code));
 }

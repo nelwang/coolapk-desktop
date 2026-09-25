@@ -13,6 +13,7 @@
       <div class="card-cover-mask"></div>
     </div>
 
+    <!-- targetType 是关联标的标题，由下方关联卡片展示；头部只显示明确的推荐来源。 -->
     <FeedHeader
       :uid="authorUid"
       :avatar="feed.userAvatar || feed.userInfo?.userAvatar"
@@ -25,8 +26,9 @@
       :verify-title="feed.userInfo?.verify_title || feed.verifyTitle"
       :dateline="feed.dateline || feed.infoHtml"
       :device="feed.device_title || feed.deviceTitle"
+      :read-num="[feed.readNum, feed.read_num, feed.viewnum, feed.hitnum].find((count) => Number(count) > 0)"
       :rank-index="rankIndex"
-      :recommend-source="feed.recommendSource || feed.targetType"
+      :recommend-source="feed.recommendSource"
       :show-device-info="showDeviceInfo"
       :entity-type="feed.entityType"
       :entity-id="feed.entityId || feed.id"
@@ -41,8 +43,19 @@
       <button class="more-menu-item" @click="handleShareImage">
         <i class="fas fa-image"></i> 生成长图
       </button>
+      <button v-if="isMyFeed" class="more-menu-item" :disabled="!canEditFeed" :title="canEditFeed ? '重新编辑动态' : '此动态当前不能编辑'" @click="handleEditFeed">
+        <i class="fas fa-pen"></i> 重新编辑
+      </button>
       <button v-if="isMyFeed" class="more-menu-item is-danger" @click="handleDeleteFeed">
         <i class="fas fa-trash-alt"></i> 删除动态
+      </button>
+      <div class="more-menu-divider"></div>
+      <!-- 点赞和转发列表入口放在省略号菜单末尾。 -->
+      <button class="more-menu-item" @click="openInteractionListFromMoreMenu('likes')">
+        <i class="far fa-heart"></i> 查看点赞用户
+      </button>
+      <button class="more-menu-item" @click="openInteractionListFromMoreMenu('forwards')">
+        <i class="fas fa-retweet"></i> 查看转发列表
       </button>
     </div>
 
@@ -154,6 +167,7 @@
         :feed-id="feed.id"
         :feed-uid="authorUid"
         :feed-username="feed.username"
+        :default-sort-mode="commentsSortMode"
         :total-comment-count="feed.replynum"
         :comments="comments"
         :loading="commentsLoading"
@@ -273,7 +287,6 @@ import { preloadUserProfile, reactiveUserProfileMap } from '../../utils/userProf
 import { renderCoolapkRichText } from '../../utils/richText';
 import { generateTextDiffHtml, getDiffSummary } from '../../utils/textDiff';
 import {
-  DEFAULT_COMMENT_SORT_MODE,
   getCommentReplyRequestOptions,
   getExpectedCommentCount,
   getReplyData,
@@ -403,6 +416,11 @@ const isMyFeed = computed(() => {
   return !!authorUid.value && authorUid.value === String(authStore.user.uid);
 });
 
+const canEditFeed = computed(() => {
+  const value = (props.feed as any).enableModify ?? (props.feed as any).enable_modify;
+  return value === undefined || Number(value) === 1;
+});
+
 const isEdited = computed(() => {
   const flag = props.feed.isModified ?? props.feed.is_modified;
   if (flag === true || flag === 1 || flag === '1') return true;
@@ -412,6 +430,8 @@ const isEdited = computed(() => {
 });
 
 const baseTargetRow = computed<any>(() =>
+  (props.feed as any).forwardSourceFeed ||
+  (props.feed as any).forward_source_feed ||
   props.feed.targetRow ||
   (props.feed as any).target_row ||
   (props.feed as any).targetFeed ||
@@ -595,9 +615,20 @@ function toggleMoreMenu() {
   moreMenuOpen.value = !moreMenuOpen.value;
 }
 
+function openInteractionListFromMoreMenu(mode: 'likes' | 'forwards') {
+  moreMenuOpen.value = false;
+  if (mode === 'likes') openLikeList();
+  else openForwardList();
+}
+
 function handleShareImage() {
   moreMenuOpen.value = false;
   shareImageOpen.value = true;
+}
+
+function handleEditFeed() {
+  moreMenuOpen.value = false;
+  appStore.openEditFeed(props.feed);
 }
 
 async function openHistoryDialog() {
@@ -746,7 +777,7 @@ const commentsPage = ref(0);
 const hasMoreComments = ref(false);
 const commentsLoadingMore = ref(false);
 const commentsLoadMoreError = ref('');
-const commentsSortMode = ref<CommentSortMode>(DEFAULT_COMMENT_SORT_MODE);
+const commentsSortMode = ref<CommentSortMode>(settingsStore.settings.commentDefaultSortMode);
 const commentsAuthorOnly = ref(false);
 let commentsFirstItem = '';
 let commentsLastItem = '';
@@ -998,6 +1029,12 @@ function handleCommentSortChange(selection: CommentSortSelection) {
   commentsAuthorOnly.value = selection.authorOnly;
   void openComments(true);
 }
+
+watch(() => settingsStore.settings.commentDefaultSortMode, (sortMode) => {
+  commentsSortMode.value = sortMode;
+  commentsAuthorOnly.value = false;
+  if (showComments.value) void openComments(true);
+});
 
 const cardRef = ref<HTMLElement | null>(null);
 const isCommentsFloatingVisible = ref(false);
@@ -1875,6 +1912,17 @@ defineExpose({
 
 .more-menu-item:hover {
   background-color: var(--surface-hover);
+}
+
+.more-menu-divider {
+  height: 1px;
+  margin: 5px 8px;
+  background: var(--border-light);
+}
+
+.more-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .more-menu-item.is-danger {

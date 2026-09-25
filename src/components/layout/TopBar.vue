@@ -327,6 +327,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAppStore } from '../../stores/app';
 import { useAuthStore } from '../../stores/auth';
 import { useNotificationStore } from '../../stores/notifications';
+import { usePageTabsStore } from '../../stores/pageTabs';
 import { useSettingsStore } from '../../stores/settings';
 import { CoolapkTauriAPI } from '../../api/coolapk';
 import { desktopNotify } from '../../utils/desktopNotify';
@@ -352,7 +353,6 @@ import {
   canNavigateForward,
   navigateBack,
   navigateForward,
-  reloadCurrentPage,
 } from '../../utils/navigation';
 import AppButton from '../common/AppButton.vue';
 import AppIconButton from '../common/AppIconButton.vue';
@@ -361,12 +361,14 @@ import BackToTop from '../common/BackToTop.vue';
 import WindowControls from './WindowControls.vue';
 import { usePlatformShortcuts } from '../../utils/shortcuts';
 import { useDesktopWindow } from '../../composables/useDesktopWindow';
+import { refreshPageTabGeneration } from '../../utils/pageTabs';
 
 const router = useRouter();
 const route = useRoute();
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
+const pageTabsStore = usePageTabsStore();
 const settingsStore = useSettingsStore();
 const { formatShortcut } = usePlatformShortcuts();
 const {
@@ -399,7 +401,7 @@ function goForward() {
 }
 
 function refreshPage() {
-  reloadCurrentPage();
+  refreshPageTabGeneration(pageTabsStore.tabs, route);
 }
 
 const NOTIFICATION_POLL_MIN_INTERVAL_MS = 60 * 1000;
@@ -1063,12 +1065,9 @@ function handleUserClick() {
   color: var(--text-primary);
 }
 
-/*
- * macOS 的 Overlay 标题栏会把原生红黄绿按钮放在 WebView 上方。
- * 品牌内容必须跳过这块安全区，否则会与窗口按钮重叠。
- */
+/* macOS Overlay 的原生红黄绿按钮占用左侧区域，桌面标题栏不显示品牌。 */
 .top-bar.is-macos .titlebar-brand {
-  padding-left: var(--macos-traffic-light-safe-width);
+  display: none;
 }
 
 .titlebar-brand-logo {
@@ -1469,7 +1468,7 @@ function handleUserClick() {
   }
 
   .top-bar.has-window-controls {
-    --window-control-width: 42px;
+    --window-control-width: 36px;
   }
 }
 

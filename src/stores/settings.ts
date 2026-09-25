@@ -14,6 +14,8 @@ import type {
   FavoriteCollectionViewMode,
   FavoriteCollectionSortMode,
   FavoriteCollectionSortDirection,
+  CommentSortPreference,
+  TopicDiscussionSortPreference,
   HomeTabKey,
 } from '../types/settings';
 
@@ -83,6 +85,8 @@ const defaultNavVisibility: NavVisibilitySettings = {
 /** 默认设备信息：与 Rust 客户端 CoolapkClient::new() 内置的默认头一致 */
 const defaultDeviceFingerprint: DeviceFingerprintSettings = {
   customFingerprint: false,
+  deviceId: '',
+  ddid: '',
   model: '23113RKC6C',
   androidVersion: '16',
   build: 'AQ3A.250226.002',
@@ -123,6 +127,7 @@ const defaultSettings: AppSettings = {
   autoLoadOriginalImage: true,
   noImageMode: false,
   showDeviceInfo: true,
+  preloadUserProfile: true,
   showHomeMonthlyRank: true,
   showHomeHotTopics: true,
   defaultHomeTab: 'digest',
@@ -130,6 +135,8 @@ const defaultSettings: AppSettings = {
   favoriteCollectionViewMode: 'large',
   favoriteCollectionSortMode: 'default',
   favoriteCollectionSortDirection: 'asc',
+  commentDefaultSortMode: 'default',
+  topicDiscussionDefaultSortMode: 'latest',
   downloadPath: '',
   maxConcurrentDownloads: 3,
   autoCleanCache: true,
@@ -242,6 +249,9 @@ export function normalizeSettings(value: unknown): AppSettings {
   } else if (isOneOf(source.favoriteCollectionSortMode, ['default', 'name', 'item-count', 'favorite-count', 'follower-count'])) {
     result.favoriteCollectionSortMode = source.favoriteCollectionSortMode as FavoriteCollectionSortMode;
   }
+  if (isOneOf(source.commentDefaultSortMode, ['default', 'likes', 'latest'])) result.commentDefaultSortMode = source.commentDefaultSortMode as CommentSortPreference;
+  if (source.topicDiscussionDefaultSortMode === 'likes') result.topicDiscussionDefaultSortMode = 'hot';
+  else if (isOneOf(source.topicDiscussionDefaultSortMode, ['default', 'latest', 'hot'])) result.topicDiscussionDefaultSortMode = source.topicDiscussionDefaultSortMode as TopicDiscussionSortPreference;
   if (Array.isArray(source.homeTabOrder)) {
     // 首页频道由服务端动态下发，不能用本地静态列表过滤，否则每次重启都会丢失
     // 用户在频道管理器中保存的排序和隐藏状态。
@@ -270,6 +280,7 @@ export function normalizeSettings(value: unknown): AppSettings {
   result.autoLoadOriginalImage = readBoolean(source.autoLoadOriginalImage, result.autoLoadOriginalImage);
   result.noImageMode = readBoolean(source.noImageMode, result.noImageMode);
   result.showDeviceInfo = readBoolean(source.showDeviceInfo, result.showDeviceInfo);
+  result.preloadUserProfile = readBoolean(source.preloadUserProfile, result.preloadUserProfile);
   result.showHomeMonthlyRank = readBoolean(source.showHomeMonthlyRank, result.showHomeMonthlyRank);
   result.showHomeHotTopics = readBoolean(source.showHomeHotTopics, result.showHomeHotTopics);
   result.downloadPath = readString(source.downloadPath, result.downloadPath);
@@ -306,6 +317,8 @@ export function normalizeSettings(value: unknown): AppSettings {
   if (isRecord(source.deviceFingerprint)) {
     const fingerprint = source.deviceFingerprint;
     result.deviceFingerprint.customFingerprint = readBoolean(fingerprint.customFingerprint, result.deviceFingerprint.customFingerprint);
+    result.deviceFingerprint.deviceId = readString(fingerprint.deviceId, result.deviceFingerprint.deviceId).trim();
+    result.deviceFingerprint.ddid = readString(fingerprint.ddid, result.deviceFingerprint.ddid).trim();
     result.deviceFingerprint.model = readString(fingerprint.model, result.deviceFingerprint.model);
     result.deviceFingerprint.androidVersion = readString(fingerprint.androidVersion, result.deviceFingerprint.androidVersion);
     result.deviceFingerprint.build = readString(fingerprint.build, result.deviceFingerprint.build);
@@ -632,26 +645,35 @@ export const useSettingsStore = defineStore('settings', () => {
     });
   }
 
-  // 将"设备信息"设置同步给 Rust 客户端（作用于所有 API 请求头）。
-  // 未启用自定义时下发空对象，Rust 端保持默认值。
-  function syncDeviceProfile(s: AppSettings) {
-    if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) return;
+  // 将用户保存的设备 ID 同步给 Rust 客户端，用于更新请求设备码。
+  async function syncDeviceProfile(s: AppSettings): Promise<boolean> {
+    if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) return true;
     const f = s.deviceFingerprint;
-    invoke('update_device_profile', {
-      profile: f.customFingerprint
-        ? {
-            userAgent: buildDeviceUserAgent(f),
-            sdkInt: f.sdkInt,
-            locale: f.locale,
-            appVersion: f.appVersion,
-            appCode: f.appCode,
-            apiVersion: '16',
-            darkMode: f.darkMode,
-          }
-        : {},
-    }).catch((err) => {
+    const deviceId = f.deviceId?.trim() || undefined;
+    try {
+      await invoke('update_device_profile', {
+        profile: {
+          ...(f.customFingerprint
+            ? {
+                userAgent: buildDeviceUserAgent(f),
+                sdkInt: f.sdkInt,
+                locale: f.locale,
+                appVersion: f.appVersion,
+                appCode: f.appCode,
+                apiVersion: '16',
+                darkMode: f.darkMode,
+                model: f.model.trim() || undefined,
+                build: f.build.trim() || undefined,
+              }
+            : {}),
+          deviceId,
+        },
+      });
+      return true;
+    } catch (err) {
       console.warn('同步设备信息设置失败:', err);
-    });
+      return false;
+    }
   }
 
   function syncNativeSettings(s: AppSettings) {
@@ -731,6 +753,7 @@ export const useSettingsStore = defineStore('settings', () => {
     settings,
     initializeSettings,
     flushSettings,
+    syncDeviceProfile,
     applyAppearance,
     setAutostart,
     setTheme,

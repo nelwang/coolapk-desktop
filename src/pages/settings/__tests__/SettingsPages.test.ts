@@ -28,7 +28,10 @@ vi.mock('../../../utils/resourceCache', () => ({
 }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: mocks.open }));
 vi.mock('@tauri-apps/plugin-autostart', () => ({ enable: mocks.enable, disable: mocks.disable, isEnabled: mocks.isEnabled }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn().mockResolvedValue(undefined),
+  isTauri: vi.fn(() => false),
+}));
 
 import AppearanceSettingsPage from '../AppearanceSettingsPage.vue';
 import AccountSettingsPage from '../AccountSettingsPage.vue';
@@ -71,16 +74,18 @@ describe('设置页面交互', () => {
     await wrapper.findAll('.density-card')[2].trigger('click');
     await wrapper.findAll('.zoom-btn')[3].trigger('click');
     await wrapper.find('.nav-toggle-card input').setValue(false);
-    const downloadNav = wrapper.findAll('.nav-toggle-card').find((card) => card.text().includes('下载'));
-    expect(downloadNav).toBeDefined();
-    await downloadNav!.find('.switch-input').setValue(false);
+    expect(wrapper.find('.nav-main-grid').text()).not.toContain('应用');
+    expect(wrapper.find('.nav-main-grid').text()).not.toContain('下载');
+    expect(wrapper.find('.nav-main-grid').text()).toContain('更多服务');
+    expect(wrapper.find('.nav-more-services-settings').exists()).toBe(false);
+    expect(wrapper.findAll('.nav-toggle-card').some((card) => card.text().includes('应用'))).toBe(false);
+    expect(wrapper.findAll('.nav-toggle-card').some((card) => card.text().includes('下载'))).toBe(false);
     expect(settings.settings.theme).toBe('dark');
     expect(settings.settings.accentColor).toBe('blue');
     expect(settings.settings.fontFamily).toBe('Noto Sans SC');
     expect(settings.settings.density).toBe('compact');
     expect(settings.settings.fontSize).toBe(16);
     expect(settings.settings.navVisibility?.home).toBe(false);
-    expect(settings.settings.navVisibility?.downloads).toBe(false);
   });
 
   it('内容页覆盖正文、链接和关键词设置', async () => {
@@ -146,12 +151,23 @@ describe('设置页面交互', () => {
     await wrapper.get('select').setValue('2211133C');
     expect(settings.settings.deviceFingerprint.model).toBe('2211133C');
     expect(settings.settings.deviceFingerprint.androidVersion).toBe('15');
-    await inputs[4].setValue('2600000');
+    const appCodeInput = inputs.find((i) => i.attributes('placeholder') === '2604201') || inputs[5];
+    await appCodeInput.setValue('2600000');
     expect(wrapper.find('.version-warning').exists()).toBe(true);
     await wrapper.get('.reset-button').trigger('click');
     expect(settings.settings.deviceFingerprint.model).toBe('23113RKC6C');
     expect(settings.settings.deviceFingerprint.appCode).toBe('2604201');
     expect(settings.settings.deviceFingerprint.sdkInt).toBe('35');
+  });
+
+  it('设备页支持数盟设备 ID 输入、智能提取与保存', async () => {
+    const { wrapper, settings } = mountPage(DeviceSettingsPage);
+    await flushPromises();
+    const deviceIdInput = wrapper.find('.full-width-input');
+    await deviceIdInput.setValue('设备ID: DU-MOCK-SAMPLE-DEVICE-ID-12345\nShuzlmID: DU-MOCK-SAMPLE-DEVICE-ID-12345');
+    expect(wrapper.find('.success-tip').exists()).toBe(true);
+    await wrapper.find('.primary-btn').trigger('click');
+    expect(settings.settings.deviceFingerprint.deviceId).toBe('DU-MOCK-SAMPLE-DEVICE-ID-12345');
   });
 
   it('下载页展示缓存总量与明细', async () => {

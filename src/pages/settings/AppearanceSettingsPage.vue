@@ -79,7 +79,21 @@
 
     <div class="setting-group">
       <h4 class="group-title">界面字体</h4>
-      <div class="setting-row">
+      <div v-if="isAndroidTauri" class="setting-row">
+        <div class="row-info">
+          <span class="row-label">系统字体</span>
+          <span class="row-sub">Android 版使用系统字体；如已保存自定义字体，可以恢复默认。</span>
+        </div>
+        <button
+          v-if="settingsStore.settings.fontFamily"
+          type="button"
+          class="font-reset-button"
+          @click="resetFontFamily"
+        >
+          恢复默认
+        </button>
+      </div>
+      <div v-else class="setting-row">
         <div class="row-info">
           <span class="row-label">字体族</span>
           <span class="row-sub">打开 Windows 系统字体选择器，从本机已安装字体中选择</span>
@@ -134,7 +148,7 @@
       </div>
     </div>
 
-    <div class="setting-group">
+    <div v-if="!isAndroidTauri" class="setting-group">
       <h4 class="group-title">首页右侧栏</h4>
       <p class="group-sub">分别控制首页右侧的热榜和热门话题卡片，关闭后不再请求对应数据</p>
 
@@ -157,18 +171,22 @@
 
     <!-- 页面栏目显隐设置区域 -->
     <div class="setting-group">
-      <h4 class="group-title">侧边栏页面栏目显隐设置</h4>
-      <p class="group-sub">根据个人使用习惯自由开启或关闭左侧侧边栏对应的功能栏目</p>
+      <h4 class="group-title">{{ isAndroidTauri ? '快捷入口栏目显隐设置' : '侧边栏页面栏目显隐设置' }}</h4>
+      <p class="group-sub">
+        {{ isAndroidTauri ? '控制手机快捷入口网格中显示的频道和功能。' : '根据个人使用习惯自由开启或关闭左侧侧边栏对应的功能栏目' }}
+      </p>
 
       <div class="setting-row">
         <div class="row-info">
           <span class="row-label">在“我的”中置顶“我的常去”</span>
-          <span class="row-sub">将“我的常去”移动到“我的”栏目子页面的最前面</span>
+          <span class="row-sub">
+            {{ isAndroidTauri ? '将“我的常去”移动到手机“我的”页面的最前面' : '将“我的常去”移动到“我的”栏目子页面的最前面' }}
+          </span>
         </div>
         <AppSwitch v-model="settingsStore.settings.myRecentPinned" />
       </div>
 
-      <div class="nav-grid">
+      <div class="nav-grid nav-main-grid">
         <div v-for="nav in navItems" :key="nav.key" class="nav-toggle-card">
           <div class="nav-item-meta">
             <i :class="[nav.icon, 'nav-item-icon']"></i>
@@ -185,7 +203,9 @@
         <div class="setting-row nav-more-master-row">
           <div class="row-info">
             <span class="row-label"><i class="fas fa-user nav-item-icon"></i> 个人中心「我的」</span>
-            <span class="row-sub">控制侧栏「我的」入口及其工作台数据子项</span>
+            <span class="row-sub">
+              {{ isAndroidTauri ? '控制快捷入口中的「我的」入口及其工作台数据子项' : '控制侧栏「我的」入口及其工作台数据子项' }}
+            </span>
           </div>
           <AppSwitch
             :model-value="getNavVisible('my')"
@@ -212,7 +232,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useSettingsStore } from '../../stores/settings';
 import type { AccentColor, FeedDensity } from '../../types/settings';
 import AppSwitch from '../../components/common/AppSwitch.vue';
@@ -223,6 +243,7 @@ import { showToast } from '../../utils/toast';
 const settingsStore = useSettingsStore();
 const { formatShortcut } = usePlatformShortcuts();
 const fontPickerOpening = ref(false);
+const isAndroidTauri = isTauri() && typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent);
 const selectedFontLabel = computed(() => settingsStore.settings.fontFamily || '系统默认');
 
 const accentColors: { key: AccentColor; label: string; color: string }[] = [
@@ -269,14 +290,12 @@ const navItems = [
   { key: 'topics', label: '话题', icon: 'fas fa-hashtag' },
   { key: 'digital', label: '数码', icon: 'fas fa-microchip' },
   { key: 'pictures', label: '酷图', icon: 'far fa-images' },
-  { key: 'apps', label: '应用', icon: 'fas fa-cubes' },
   { key: 'more', label: '更多服务', icon: 'fas fa-shapes' },
   { key: 'notifications', label: '通知', icon: 'far fa-bell' },
   { key: 'favorites', label: '收藏', icon: 'far fa-bookmark' },
   { key: 'history', label: '历史', icon: 'far fa-clock' },
   { key: 'messages', label: '消息', icon: 'far fa-comment-alt' },
   { key: 'following', label: '我关注的', icon: 'fas fa-user-group' },
-  { key: 'downloads', label: '下载', icon: 'fas fa-download' },
 ];
 
 const moreNavItems = moreNavs.map(({ key, label, icon }) => ({ key, label, icon }));
@@ -578,5 +597,70 @@ function toggleNav(key: string) {
 
 .font-reset-button:hover {
   text-decoration: underline;
+}
+
+@media (max-width: 720px) {
+  .settings-section {
+    width: 100%;
+    max-width: none;
+  }
+
+  .theme-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+  }
+
+  .theme-card {
+    min-width: 0;
+    padding: var(--space-2);
+  }
+
+  .preview-box {
+    height: 48px;
+  }
+
+  .setting-row {
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .row-info {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .row-sub {
+    line-height: 1.4;
+  }
+
+  .font-picker-controls {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .font-picker-button {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .density-options {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .density-card {
+    min-width: 0;
+    padding: var(--space-3) 6px;
+  }
+
+  .nav-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .nav-toggle-card {
+    min-width: 0;
+  }
 }
 </style>

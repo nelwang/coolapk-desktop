@@ -536,6 +536,10 @@ export class CoolapkTauriAPI {
     return await invokeNative('get_user_profile', { uid });
   }
 
+  static async getUserRemarkList(uid: string) {
+    return await invokeNative('get_user_remark_list', { uid });
+  }
+
   static async updateUserProfile(key: string, value: string) {
     return await invokeNative('update_user_profile', { key, value });
   }
@@ -843,12 +847,12 @@ export class CoolapkTauriAPI {
     return await this.updateFeedCloudCollections(feedId, '', cancelIds, feedType || 'feed', trace);
   }
 
-  static async getCollectionList(uid: string, page: number = 1) {
-    return await invokeNative('get_collection_list', { uid, page });
+  static async getCollectionList(uid: string, page: number = 1, firstItem: string = '', lastItem: string = '') {
+    return await invokeNative('get_collection_list', { uid, page, firstItem, lastItem });
   }
 
-  static async getCollectionItemList(collectionId: string, page: number = 1) {
-    return await invokeNative('get_collection_item_list', { collectionId, page });
+  static async getCollectionItemList(collectionId: string, page: number = 1, firstItem: string = '', lastItem: string = '') {
+    return await invokeNative('get_collection_item_list', { collectionId, page, firstItem, lastItem });
   }
 
   static async getCollectionDetail(collectionId: string) {
@@ -1174,6 +1178,14 @@ export class CoolapkTauriAPI {
     if (pic) args.pic = pic;
     if (postToken) args.postToken = postToken;
     return await invokeNative('create_feed', args);
+  }
+
+  static async getEditableFeed(feedId: string) {
+    return await invokeNative('get_editable_feed', { feedId }, { retry: false, kind: 'feed' });
+  }
+
+  static async updateFeed(feedId: string, message: string, pic: string, postToken?: string) {
+    return await invokeNative('update_feed', { feedId, message, pic, postToken });
   }
 
   static async saveCookie(cookieStr: string) {

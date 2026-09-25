@@ -30,14 +30,17 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useAppStore } from '../../stores/app';
+import { usePageTabsStore } from '../../stores/pageTabs';
 import { useSettingsStore } from '../../stores/settings';
 import { CoolapkTauriAPI } from '../../api/coolapk';
 import { openFeedDetail } from '../../utils/feedNavigation';
 import { showToast } from '../../utils/toast';
 import { getOriginalImageUrl } from '../../utils/image';
 import { usePlatformShortcuts } from '../../utils/shortcuts';
+import { refreshPageTabGeneration } from '../../utils/pageTabs';
+import { useAndroidBackButton } from '../../utils/androidBackButton';
 
 type ContextKind = 'page' | 'selection' | 'link' | 'image' | 'comment' | 'feed' | 'message' | 'chat-message';
 
@@ -77,7 +80,9 @@ type MenuItem = {
 type MenuData = ContextState & { items: MenuItem[] };
 
 const router = useRouter();
+const route = useRoute();
 const appStore = useAppStore();
+const pageTabsStore = usePageTabsStore();
 const settingsStore = useSettingsStore();
 const { formatShortcut } = usePlatformShortcuts();
 const menu = ref<MenuData | null>(null);
@@ -385,7 +390,7 @@ function createItems(state: ContextState): MenuItem[] {
   return [
     item('back', '返回', 'fas fa-arrow-left', () => router.back(), { shortcut: formatShortcut('Alt+←') }),
     item('forward', '前进', 'fas fa-arrow-right', () => router.go(1), { shortcut: formatShortcut('Alt+→') }),
-    item('refresh', '刷新页面', 'fas fa-sync-alt', () => window.location.reload(), { shortcut: formatShortcut('Ctrl+R') }),
+    item('refresh', '刷新页面', 'fas fa-sync-alt', () => refreshPageTabGeneration(pageTabsStore.tabs, route), { shortcut: formatShortcut('Ctrl+R') }),
     separator('page-separator-1'),
     item('scroll-top', '返回顶部', 'fas fa-arrow-up', () => scrollToTop()),
     item('toggle-sidebar', settingsStore.settings.sidebarCollapsed ? '显示侧边栏' : '隐藏侧边栏', 'fas fa-columns', () => settingsStore.toggleSidebar()),
@@ -572,6 +577,8 @@ function adjustFontSize(delta: number) {
 function closeMenu() {
   menu.value = null;
 }
+
+useAndroidBackButton(() => Boolean(menu.value), closeMenu);
 
 function openMenu(event: MouseEvent) {
   // 标签栏提供收藏、固定和关闭等专用菜单，不能被全局捕获阶段的页面菜单抢先接管。

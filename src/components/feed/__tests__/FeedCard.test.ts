@@ -38,6 +38,25 @@ describe('动态卡片编辑记录', () => {
     setActivePinia(createPinia());
   });
 
+  it('把动态浏览量传给卡片头部', () => {
+    const wrapper = mount(FeedCard, {
+      props: { feed: { id: 'feed-with-views', uid: '456', username: '测试用户', message: '正文', readNum: 604000 } },
+      global: { stubs: { FeedHeader: { props: ['readNum'], template: '<div class="stub-read-count" :data-read-num="String(readNum)"></div>' }, FeedContent: true, FeedImageGrid: true, FeedVideoCard: true, FeedActionBar: true, FeedCommentSection: true, ForwardDialog: true, FeedShareImageDialog: true, FeedInteractionListDialog: true, FeedCollectionPickerDialog: true, AppDialog: true, LoadingState: true } },
+    });
+    expect(wrapper.find('.stub-read-count').attributes('data-read-num')).toBe('604000');
+    wrapper.unmount();
+  });
+
+  it('转发动态展示服务端返回的原动态内容', () => {
+    const wrapper = mount(FeedCard, {
+      props: { feed: { id: 'forward-1', uid: '456', username: '转发用户', message: '转发内容', forwardId: 'source-1', forwardSourceFeed: { id: 'source-1', entityType: 'feed', username: '原作者', message: '原动态内容' } } },
+      global: { stubs: { FeedHeader: true, FeedContent: true, FeedImageGrid: true, FeedVideoCard: true, FeedActionBar: true, FeedCommentSection: true, ForwardDialog: true, FeedShareImageDialog: true, FeedInteractionListDialog: true, FeedCollectionPickerDialog: true, AppDialog: true, LoadingState: true } },
+    });
+    expect(wrapper.find('.quoted-feed-box').text()).toContain('原作者');
+    expect(wrapper.find('.quoted-feed-box').text()).toContain('原动态内容');
+    wrapper.unmount();
+  });
+
   it('闲置动态显示并打开 APK 返回的闲鱼链接', async () => {
     const link = 'https://m.tb.cn/h.example?tk=test';
     const wrapper = mount(FeedCard, {
@@ -98,6 +117,8 @@ describe('动态卡片编辑记录', () => {
 
     await wrapper.find('.stub-more').trigger('click');
     expect(wrapper.find('.more-menu').text()).toContain('生成长图');
+    expect(wrapper.find('.more-menu').text()).toContain('查看点赞用户');
+    expect(wrapper.find('.more-menu').text()).toContain('查看转发列表');
 
     await wrapper.find('.more-menu-item').trigger('click');
     expect(wrapper.find('.more-menu').exists()).toBe(false);
