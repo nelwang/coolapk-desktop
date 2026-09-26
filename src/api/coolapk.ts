@@ -3,6 +3,7 @@ import { router } from '../router';
 import { getFeedDetailMessage, hasFeedMoreSuffix, parseWebFeedDetail } from '../utils/feedContent';
 import { normalizeCoolapkRoute } from '../utils/coolapkRoute';
 import { requestWithPolicy, type RequestKind } from '../utils/requestCenter';
+import { logDiagnostic } from '../utils/diagnosticLogger';
 
 async function safeFetchOnce(pythonEndpoint: string, tauriCmd: string, tauriArgs: any = {}) {
   let rustError: unknown;
@@ -53,11 +54,19 @@ async function safeFetch(pythonEndpoint: string, tauriCmd: string, tauriArgs: an
 type NativeRequestOptions = { retry?: boolean; maxAttempts?: number; timeoutMs?: number; kind?: RequestKind };
 
 async function invokeNative(tauriCmd: string, tauriArgs: any = {}, options: NativeRequestOptions = {}) {
-  return requestWithPolicy(tauriCmd, async () => {
-    const response = await invoke(tauriCmd, tauriArgs);
-    if (response && (response as any).code === 200) return response as any;
-    throw new Error((response as any)?.message || `${tauriCmd} 返回格式不正确`);
-  }, options);
+  const started = Date.now();
+  try {
+    const result = await requestWithPolicy(tauriCmd, async () => {
+      const response = await invoke(tauriCmd, tauriArgs);
+      if (response && (response as any).code === 200) return response as any;
+      throw new Error((response as any)?.message || `${tauriCmd} 返回格式不正确`);
+    }, options);
+    logDiagnostic('debug', 'api', 'request_ok', `${tauriCmd} elapsed_ms=${Date.now() - started}`);
+    return result;
+  } catch (error) {
+    logDiagnostic('warn', 'api', 'request_failed', `${tauriCmd} elapsed_ms=${Date.now() - started}`);
+    throw error;
+  }
 }
 
 export class CoolapkTauriAPI {
@@ -499,6 +508,11 @@ export class CoolapkTauriAPI {
     throw primaryError instanceof Error ? primaryError : new Error(String(primaryError || '动态详情加载失败'));
   }
 
+  /** 后台索引和导出读取公开正文，不携带当前账号 Cookie。 */
+  static async getPublicFeedDetail(feedId: string) {
+    return await invokeNative('get_public_feed_detail', { feedId }, { retry: true, kind: 'feed' });
+  }
+
   // APK fallback: POST /v6/player/getUrl with form field params=<provider payload>.
   static async resolveVideoUrl(requestParams: string) {
     return await invokeNative('resolve_video_url', { requestParams }, { retry: true, kind: 'feed' });
@@ -532,8 +546,16 @@ export class CoolapkTauriAPI {
     return await invokeNative('get_user_space', { uid });
   }
 
+  static async getPublicUserSpace(uid: string) {
+    return await invokeNative('get_public_user_space', { uid });
+  }
+
   static async getUserProfile(uid: string) {
     return await invokeNative('get_user_profile', { uid });
+  }
+
+  static async getPublicUserProfile(uid: string) {
+    return await invokeNative('get_public_user_profile', { uid });
   }
 
   static async getUserRemarkList(uid: string) {
@@ -1333,7 +1355,7 @@ export class CoolapkTauriAPI {
   }
 
   static async installUpdate(installerPath: string, portable = false) {
-    await invoke('install_update', { installerPath, portable });
+    return await invoke<'started' | 'permission_required'>('install_update', { installerPath, portable });
   }
 
   static async getUpdateDistribution() {
