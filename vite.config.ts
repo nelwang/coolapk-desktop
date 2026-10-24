@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import { androidIconSvgPlugin } from './scripts/icon-svg-plugin';
+import { androidIconSvgPlugin } from './scripts/icon-svg-plugin.ts';
 
 export default defineConfig({
   plugins: [vue(), androidIconSvgPlugin()],
@@ -9,6 +9,10 @@ export default defineConfig({
     host: process.env.TAURI_DEV_HOST || '127.0.0.1',
     port: 17520,
     strictPort: true,
+    watch: {
+      // 避免 Windows 下 Vite 监听正在编译中的 Rust target 产生 EBUSY 文件锁报错
+      ignored: ['**/src-tauri/**'],
+    },
   },
   envPrefix: ['VITE_', 'TAURI_'],
   build: {

@@ -20,7 +20,7 @@ describe('账号设备信息自动同步', () => {
     const { auth, settings, api } = setup();
     stop = setupAccountDeviceSync(auth, settings, api);
     await flushPromises();
-    expect(settings.profile?.model).toBe('iPhone19,7');
+    expect(settings.profile?.model).toBe('23113RKC6C');
     settings.settings.deviceFingerprint.customFingerprint = true;
     await flushPromises();
     expect(settings.profile).toBeNull();
@@ -43,7 +43,7 @@ describe('账号设备信息自动同步', () => {
     expect(settings.profile).toMatchObject({ source: 'history', model: '2210132C' });
     auth.isLoggedIn = false;
     await flushPromises();
-    expect(settings.profile).toMatchObject({ source: 'fallback', model: 'iPhone19,7' });
+    expect(settings.profile).toMatchObject({ source: 'fallback', model: '23113RKC6C' });
   });
 
   it('切换账号后旧请求迟到也不能覆盖新账号的兜底结果', async () => {

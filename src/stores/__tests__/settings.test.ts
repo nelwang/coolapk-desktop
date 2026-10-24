@@ -28,10 +28,10 @@ describe('settings store', () => {
     store.settings.deviceFingerprint.deviceId = 'saved-id';
     const saved = JSON.parse(JSON.stringify(store.settings.deviceFingerprint));
     await store.setAutomaticDeviceProfile({ ...fallbackAccountDevice });
-    expect(invoke).toHaveBeenLastCalledWith('update_device_profile', { profile: expect.objectContaining({ model: 'iPhone19,7', brand: 'Apple', deviceId: 'saved-id', userAgent: fallbackAccountDevice.userAgent }) });
+    expect(invoke).toHaveBeenLastCalledWith('update_device_profile', { profile: expect.objectContaining({ model: '23113RKC6C', brand: 'Redmi', deviceId: 'saved-id', userAgent: fallbackAccountDevice.userAgent }) });
     expect(store.settings.deviceFingerprint).toEqual(saved);
     await store.setAutomaticDeviceProfile({ ...fallbackAccountDevice, source: 'history', userAgent: 'Dalvik/2.1.0 (#Build; Xiaomi; real-model; real-build; 16) +CoolMarket/16.5.1' });
-    expect(invoke).toHaveBeenLastCalledWith('update_device_profile', { profile: expect.objectContaining({ userAgent: 'Dalvik/2.1.0 (#Build; Xiaomi; real-model; real-build; 16) +CoolMarket/16.2.0-2604201-universal CoolapkDesktopAuto' }) });
+    expect(invoke).toHaveBeenLastCalledWith('update_device_profile', { profile: expect.objectContaining({ userAgent: 'Dalvik/2.1.0 (#Build; Xiaomi; real-model; real-build; 16) +CoolMarket/16.2.0-2604201-universal' }) });
     store.settings.deviceFingerprint.customFingerprint = true;
     await store.syncDeviceProfile(store.settings);
     expect(invoke).toHaveBeenLastCalledWith('update_device_profile', { profile: expect.objectContaining({ model: saved.model, deviceId: 'saved-id' }) });

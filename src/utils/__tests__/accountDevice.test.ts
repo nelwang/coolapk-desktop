@@ -23,7 +23,7 @@ describe('账号历史机型识别', () => {
   it('排除旧版兼容机型、自动设置后的自身记录和异常 UA', () => {
     const old = 'Dalvik/2.1.0 (Linux; U; Android 16; 23113RKC6C Build/AQ3A.250226.002) (#Build; Redmi; 23113RKC6C; AQ3A.250226.002; 16) +CoolMarket/16.2.0-2604201-universal';
     for (const ua of [old, fallbackAccountDevice.userAgent, `${androidUa} CoolapkDesktopAuto`, `${androidUa}\r\nInjected: yes`]) expect(parseAccountDevice(ua)).toBeNull();
-    expect(fallbackAccountDevice).toMatchObject({ model: 'iPhone19,7', label: 'iPhone 18 Pro Max', source: 'fallback' });
+    expect(fallbackAccountDevice).toMatchObject({ model: '23113RKC6C', label: 'Redmi K70 Pro', source: 'fallback' });
   });
 
   it('比较动态和评论发布时间，忽略置顶顺序及其他账号的记录', async () => {

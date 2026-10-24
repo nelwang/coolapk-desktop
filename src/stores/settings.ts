@@ -789,7 +789,7 @@ export const useSettingsStore = defineStore('settings', () => {
                 model: automaticDeviceProfile.value.model,
                 build: automaticDeviceProfile.value.build,
                 // 仅复用设备与系统信息，酷安版本保持与本客户端请求头一致，并标记本客户端发布的记录。
-                userAgent: `${automaticDeviceProfile.value.userAgent.replace(/\+CoolMarket\/\S+/, `+CoolMarket/${defaultDeviceFingerprint.appVersion}-${defaultDeviceFingerprint.appCode}-universal`)}${automaticDeviceProfile.value.source === 'history' ? ' CoolapkDesktopAuto' : ''}`,
+                userAgent: automaticDeviceProfile.value.userAgent.replace(/\+CoolMarket\/\S+/, `+CoolMarket/${defaultDeviceFingerprint.appVersion}-${defaultDeviceFingerprint.appCode}-universal`),
                 ...(automaticDeviceProfile.value.sdkInt ? { sdkInt: automaticDeviceProfile.value.sdkInt } : {}),
               } : {}),
           deviceId,

@@ -1797,8 +1797,8 @@ impl CoolapkClient {
         let requested_with = "XMLHttpRequest";
         let mut request = self.apply_device_profile(
             self.api_client()?
-                .request(method, url)
-                .header("X-App-Token", token)
+                .request(method, url.clone())
+                .header("X-App-Token", token.clone())
                 .header("X-Requested-With", requested_with)
                 .query(query),
         )?;
@@ -2849,19 +2849,14 @@ impl CoolapkClient {
         first_item: &str,
         last_item: &str,
     ) -> Result<Value, String> {
-        let raw = self
-            .api_get(
-                "/v6/main/indexV8",
-                &[
-                    ("page", page.to_string()),
-                    ("firstLaunch", "0".to_string()),
-                    ("installTime", "0".to_string()),
-                    ("firstItem", first_item.to_string()),
-                    ("lastItem", last_item.to_string()),
-                    ("ids", "".to_string()),
-                ],
-            )
-            .await?;
+        let mut query = vec![("page", page.to_string())];
+        if !first_item.trim().is_empty() {
+            query.push(("firstItem", first_item.to_string()));
+        }
+        if !last_item.trim().is_empty() {
+            query.push(("lastItem", last_item.to_string()));
+        }
+        let raw = self.api_get("/v6/main/indexV8", &query).await?;
         Ok(json!({ "code": 200, "data": Self::extract_cleaned_list(&raw) }))
     }
 
@@ -2873,19 +2868,14 @@ impl CoolapkClient {
         first_item: &str,
         last_item: &str,
     ) -> Result<Value, String> {
-        let raw = self
-            .api_get(
-                "/v6/main/indexV8",
-                &[
-                    ("page", page.to_string()),
-                    ("firstLaunch", "0".to_string()),
-                    ("installTime", "0".to_string()),
-                    ("firstItem", first_item.to_string()),
-                    ("lastItem", last_item.to_string()),
-                    ("ids", "".to_string()),
-                ],
-            )
-            .await?;
+        let mut query = vec![("page", page.to_string())];
+        if !first_item.trim().is_empty() {
+            query.push(("firstItem", first_item.to_string()));
+        }
+        if !last_item.trim().is_empty() {
+            query.push(("lastItem", last_item.to_string()));
+        }
+        let raw = self.api_get("/v6/main/indexV8", &query).await?;
         let response = wrap_api_data(raw)?;
         Ok(json!({
             "code": 200,
